@@ -1,186 +1,174 @@
 import pygame
 import sys
-import random
-import time
+import math
 
 pygame.init()
 
-# 화면 설정
-SCREEN_WIDTH, SCREEN_HEIGHT = 800, 600
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Bullet Survival Game")
+screen = pygame.display.set_mode((800, 600))
+pygame.display.set_caption("Collision: Circle / AABB / OBB (SAT)")
 
 # 색상
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
 RED = (255, 0, 0)
+BLUE = (0, 0, 255)
+GREEN = (0, 255, 0)
+GRAY = (150, 150, 150)
+BLACK = (0, 0, 0)
 
-# 글꼴
+# 폰트
+font = pygame.font.SysFont(None, 36)
+
+# 플레이어
+player_x, player_y = 100, 100
+size = 100
+speed = 5
+
+# 고정 오브젝트 (회전)
+fixed_x, fixed_y = 400, 300
+angle = 0
+rotation_speed = 1
+
 clock = pygame.time.Clock()
-font = pygame.font.SysFont(None, 30)
-game_over_font = pygame.font.SysFont(None, 60)
 
-# 플레이어 원 설정
-initial_x = SCREEN_WIDTH // 2
-initial_y = SCREEN_HEIGHT // 2
-x = initial_x
-y = initial_y
-radius = 50
-speed = 10
-color = BLUE
+# OBB 꼭짓점 계산
+def get_rotated_corners(cx, cy, w, h, angle):
+    rad = math.radians(angle)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
 
-# 탄막 설정
-bullets = []  # [x, y, dx, dy, color]
-bullet_speed = 3
-bullet_size = 30
-base_spawn_prob = 0.02  # 기본 탄막 출현 확률
+    hw, hh = w / 2, h / 2
 
-# 방향키 색 변경 처리
-color_changed = False
+    corners = [
+        (-hw, -hh), (hw, -hh),
+        (hw, hh), (-hw, hh)
+    ]
 
-# 점수
-score = 0
-start_ticks = pygame.time.get_ticks()  # 게임 시작 시간
+    rotated = []
+    for x, y in corners:
+        rx = x * cos_a - y * sin_a + cx
+        ry = x * sin_a + y * cos_a + cy
+        rotated.append((rx, ry))
+    return rotated
 
-# 게임 상태
-running = True
-game_over = False
+# SAT 충돌
+def project(axis, points):
+    dots = [p[0]*axis[0] + p[1]*axis[1] for p in points]
+    return min(dots), max(dots)
 
-while running:
-    shift_pressed = False
-    moved = False  # 방향키 누름 체크
+def normalize(v):
+    length = math.sqrt(v[0]**2 + v[1]**2)
+    return (v[0]/length, v[1]/length)
 
+def sat_collision(poly1, poly2):
+    edges = []
+
+    for poly in (poly1, poly2):
+        for i in range(len(poly)):
+            p1 = poly[i]
+            p2 = poly[(i+1)%len(poly)]
+            edge = (p2[0]-p1[0], p2[1]-p1[1])
+            axis = (-edge[1], edge[0])
+            axis = normalize(axis)
+            edges.append(axis)
+
+    for axis in edges:
+        min1, max1 = project(axis, poly1)
+        min2, max2 = project(axis, poly2)
+
+        if max1 < min2 or max2 < min1:
+            return False
+    return True
+
+while True:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            running = False
+            pygame.quit()
+            sys.exit()
 
+    # 입력
     keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT]:
+        player_x -= speed
+    if keys[pygame.K_RIGHT]:
+        player_x += speed
+    if keys[pygame.K_UP]:
+        player_y -= speed
+    if keys[pygame.K_DOWN]:
+        player_y += speed
 
-    # Shift 키 확인
-    if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-        shift_pressed = True
+    if keys[pygame.K_z]:
+        rotation_speed += 0.05
 
-    move_speed = speed * 2 if shift_pressed else speed
+    angle += rotation_speed
 
-    if not game_over:
-        # 방향키 이동
-        if keys[pygame.K_LEFT]:
-            x -= move_speed
-            moved = True
-        if keys[pygame.K_RIGHT]:
-            x += move_speed
-            moved = True
-        if keys[pygame.K_UP]:
-            y -= move_speed
-            moved = True
-        if keys[pygame.K_DOWN]:
-            y += move_speed
-            moved = True
+    # 플레이어
+    player_rect = pygame.Rect(player_x, player_y, size, size)
+    player_center = player_rect.center
 
-        # 한 번만 색 변경
-        if moved and not color_changed:
-            color = (random.randint(0, 255),
-                     random.randint(0, 255),
-                     random.randint(0, 255))
-            color_changed = True
-        if not moved:
-            color_changed = False
+    # 고정 오브젝트
+    fixed_center = (fixed_x, fixed_y)
+    fixed_corners = get_rotated_corners(fixed_x, fixed_y, size, size, angle)
 
-        # 화면 밖으로 나가지 않게 제한
-        if x < radius:
-            x = radius
-        if x > SCREEN_WIDTH - radius:
-            x = SCREEN_WIDTH - radius
-        if y < radius:
-            y = radius
-        if y > SCREEN_HEIGHT - radius:
-            y = SCREEN_HEIGHT - radius
+    # 🔴 AABB (고정 크기!)
+    fixed_aabb = pygame.Rect(
+        fixed_x - size // 2,
+        fixed_y - size // 2,
+        size,
+        size
+    )
+    aabb_collision = player_rect.colliderect(fixed_aabb)
 
-        # 🔹 난이도 상승: 시간이 지날수록 탄막 출현 확률 증가
-        elapsed_seconds = (pygame.time.get_ticks() - start_ticks) / 1000
-        spawn_prob = base_spawn_prob + 0.0005 * elapsed_seconds  # 점점 증가
+    # 🔵 Circle
+    player_radius = size // 2
+    fixed_radius = size // 2
 
-        # 🔹 탄막 생성 (모든 방향)
-        if random.random() < spawn_prob:
-            side = random.choice(["top", "bottom", "left", "right"])
-            if side == "top":
-                bx = random.randint(bullet_size, SCREEN_WIDTH - bullet_size)
-                by = -bullet_size
-                dx, dy = 0, bullet_speed
-            elif side == "bottom":
-                bx = random.randint(bullet_size, SCREEN_WIDTH - bullet_size)
-                by = SCREEN_HEIGHT + bullet_size
-                dx, dy = 0, -bullet_speed
-            elif side == "left":
-                bx = -bullet_size
-                by = random.randint(bullet_size, SCREEN_HEIGHT - bullet_size)
-                dx, dy = bullet_speed, 0
-            else:  # right
-                bx = SCREEN_WIDTH + bullet_size
-                by = random.randint(bullet_size, SCREEN_HEIGHT - bullet_size)
-                dx, dy = -bullet_speed, 0
-            bullets.append([bx, by, dx, dy, RED])
+    dx = player_center[0] - fixed_center[0]
+    dy = player_center[1] - fixed_center[1]
+    distance = math.sqrt(dx**2 + dy**2)
 
-        # 화면 채우기
-        screen.fill(WHITE)
+    circle_collision = distance < (player_radius + fixed_radius)
 
-        # 플레이어 원 그리기
-        pygame.draw.circle(screen, color, (x, y), radius)
+    # 🟢 OBB (SAT)
+    player_corners = [
+        player_rect.topleft,
+        player_rect.topright,
+        player_rect.bottomright,
+        player_rect.bottomleft
+    ]
 
-        # 탄막 이동 및 충돌 처리
-        new_bullets = []
-        for bullet in bullets:
-            bullet[0] += bullet[2]
-            bullet[1] += bullet[3]
-            rect = pygame.Rect(bullet[0]-bullet_size//2, bullet[1]-bullet_size//2,
-                               bullet_size, bullet_size)
-            pygame.draw.rect(screen, bullet[4], rect)
+    obb_collision = sat_collision(player_corners, fixed_corners)
 
-            # 충돌 감지
-            dist_x = abs(x - rect.centerx)
-            dist_y = abs(y - rect.centery)
-            if dist_x < radius + bullet_size/2 and dist_y < radius + bullet_size/2:
-                game_over = True  # 충돌 시 게임 오버
-            else:
-                # 화면 밖이 아니면 유지
-                if -bullet_size <= bullet[0] <= SCREEN_WIDTH + bullet_size and -bullet_size <= bullet[1] <= SCREEN_HEIGHT + bullet_size:
-                    new_bullets.append(bullet)
-        bullets = new_bullets
+    # 🎨 배경 (노란색으로 변경)
+    any_collision = circle_collision or aabb_collision or obb_collision
+    screen.fill(YELLOW if any_collision else WHITE)
 
-        # 🔹 점수 증가 (원 오래 버틸수록)
-        score = int(elapsed_seconds * 10)
-        score_text = font.render(f"Score: {score}", True, BLACK)
-        screen.blit(score_text, (10, 40))
+    # 텍스트 색
+    text_color = BLACK if any_collision else BLACK  # 노란 배경이라 검정 유지
 
-    else:
-        # 게임 오버 화면
-        screen.fill(WHITE)
-        game_over_text = game_over_font.render("GAME OVER", True, RED)
-        screen.blit(game_over_text, (SCREEN_WIDTH//2 - 180, SCREEN_HEIGHT//2 - 50))
-        score_text = font.render(f"Final Score: {score}", True, BLACK)
-        screen.blit(score_text, (SCREEN_WIDTH//2 - 80, SCREEN_HEIGHT//2 + 20))
-        restart_text = font.render("Press R to Restart or Q to Quit", True, BLACK)
-        screen.blit(restart_text, (SCREEN_WIDTH//2 - 160, SCREEN_HEIGHT//2 + 60))
+    # 텍스트
+    circle_text = font.render(f"Circle: {'HIT' if circle_collision else 'MISS'}", True, text_color)
+    aabb_text = font.render(f"AABB: {'HIT' if aabb_collision else 'MISS'}", True, text_color)
+    obb_text = font.render(f"OBB: {'HIT' if obb_collision else 'MISS'}", True, text_color)
 
-        # 게임 오버 상태에서 키 입력 처리
-        if keys[pygame.K_r]:
-            # 초기화
-            x, y = initial_x, initial_y
-            bullets.clear()
-            score = 0
-            start_ticks = pygame.time.get_ticks()
-            game_over = False
-        if keys[pygame.K_q]:
-            running = False
+    screen.blit(circle_text, (10, 10))
+    screen.blit(aabb_text, (10, 40))
+    screen.blit(obb_text, (10, 70))
 
-    # FPS 표시
-    fps = clock.get_fps()
-    fps_text = font.render(f"FPS: {int(fps)}", True, BLACK)
-    screen.blit(fps_text, (10, 10))
+    # 🔳 오브젝트
+    pygame.draw.rect(screen, GRAY, player_rect)
+    pygame.draw.polygon(screen, GRAY, fixed_corners)
+
+    # 🔴 AABB (고정 크기 표시)
+    pygame.draw.rect(screen, RED, player_rect, 2)
+    pygame.draw.rect(screen, RED, fixed_aabb, 2)
+
+    # 🔵 Circle
+    pygame.draw.circle(screen, BLUE, player_center, player_radius, 2)
+    pygame.draw.circle(screen, BLUE, fixed_center, fixed_radius, 2)
+
+    # 🟢 OBB
+    pygame.draw.polygon(screen, GREEN, fixed_corners, 2)
 
     pygame.display.flip()
     clock.tick(60)
-
-pygame.quit()
-sys.exi
