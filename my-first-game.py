@@ -7,7 +7,7 @@ pygame.init()
 screen = pygame.display.set_mode((800, 600))
 pygame.display.set_caption("Collision: Circle / AABB / OBB (SAT)")
 
-# 색상
+# 색상ㅇ
 WHITE = (255, 255, 255)
 YELLOW = (255, 255, 0)
 RED = (255, 0, 0)
